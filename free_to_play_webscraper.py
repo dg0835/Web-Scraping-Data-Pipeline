@@ -1,5 +1,12 @@
 #%%
 
+'''
+
+AWS SSH command:
+
+ssh -i "keypair1.pem" ubuntu@ec2-13-40-221-22.eu-west-2.compute.amazonaws.com
+
+'''
 from email.mime import image
 from fileinput import filename
 from lib2to3.pgen2 import driver
@@ -8,12 +15,15 @@ from unittest import case
 from urllib import response
 from xml.dom.minidom import Element
 from importlib_metadata import os
+from pyparsing import Opt
 from selenium import webdriver
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
+from selenium.webdriver import ChromeOptions
 import time
 import pandas as pd
 import numpy as np
@@ -22,8 +32,9 @@ import json
 import os
 import urllib.request
 import boto3
-
-from soupsieve import select
+import sqlalchemy
+import psycopg2
+from sqlalchemy import create_engine
 
 s3_client = boto3.client('s3')
 
@@ -88,6 +99,8 @@ class Scraper:
 
     def __init__(self, url):
 
+        time.sleep(5)
+
         '''
         Initialise the scraper. Chromedriver is used and url
         is the url that will be scraped.
@@ -108,6 +121,10 @@ class Scraper:
         time.sleep(5)
         accept_cookies_button = self.driver.find_element_by_xpath('//*[@id="acceptAllButton"]')
         accept_cookies_button.click()
+
+    def scroll_to_bottom(self):
+        pass
+
 
     def scrape_game_info(self, links):
 
@@ -136,6 +153,20 @@ class Scraper:
                 print("Age restricted game skipped")
                 continue
 
+            '''
+            check for a game description (no description is an indicator that
+            the sample is not a game itself)
+            '''
+            
+            try:
+                element = WebDriverWait(self.driver, 5).until(
+                    EC.presence_of_element_located((By.XPATH, '//*[@class="game_description_snippet"]'))
+                )
+                game_desc = self.driver.find_element_by_xpath('//*[@class="game_description_snippet"]').text
+
+            except:
+                print("No game description found. Game skipped")
+                continue
 
             #name
 
@@ -150,10 +181,6 @@ class Scraper:
                 game_price = self.driver.find_element_by_xpath('//*[@class="discount_final_price"]').text
 
             
-            #desc
-
-            game_desc = self.driver.find_element_by_xpath('//*[@class="game_description_snippet"]').text
-
             #images
 
             image_link = self.driver.find_element_by_xpath('//*[@class="game_header_image_full"]')
@@ -189,45 +216,24 @@ class Scraper:
         items_to_scrape = scrape_quantity
         time.sleep(5)
 
-        #products1 = self.driver.find_elements_by_xpath('//*[@class="tab_item  "]')
-        #products2 = self.driver.find_elements_by_xpath('//*[@class="tab_item   app_impression_tracked"]')
+        products1 = self.driver.find_elements_by_xpath('//*[@class="search_result_row ds_collapse_flag "]')
+        products2 = self.driver.find_elements_by_xpath('//*[@class="search_result_row ds_collapse_flag  app_impression_tracked"]')
 
-        products = self.driver.find_elements_by_xpath('//*[@class="salepreviewwidgets_StoreSaleWidgetHalfLeft_111nf"]')
+        products = products1 + products2
+
+        print(products)
 
         game_links = []
-
+        
         for product in products:
 
             if items_to_scrape == 0:
                 break
             items_to_scrape -= 1
             time.sleep(1)
-            a_tag = product.find_element_by_tag_name('a')
-            link = a_tag.get_attribute('href')
-            game_links.append(link)
-            print(link)
-
-        '''
-        for product in products1:
-
-            if items_to_scrape == 0:
-                break
-            items_to_scrape -= 1
-            time.sleep(1)
             link = product.get_attribute('href')
             game_links.append(link)
             print(link)
-
-        for product in products2:
-
-            if items_to_scrape == 0:
-                break
-            time.sleep(1)
-            link = product.get_attribute('href')
-            game_links.append(link)
-            print(link)
-        '''
-
 
 
         return game_links
@@ -325,27 +331,6 @@ class Scraper:
         save_datapoint_dicts()
         download_images()
 
-    def upload_to_aws(self):
-
-        """
-        Upload each json file and image to AWS, retaining the file
-        structure. 
-        """
-
-        raw_data_dir = '/home/dg0834/Desktop/AiCore_Python/projects/webscraper/raw_data'
-
-        os.chdir(raw_data_dir)
-
-        for dirpath, dirname, filename in os.walk(raw_data_dir):
-            print(f'Current Path: {dirpath}')
-            print(f'Directories: {dirname}')
-            print(f'Files: {filename} \n')
-
-
-            for file in filename:
-                os.chdir(dirpath)
-                response = s3_client.upload_file(file, 'vg-webscraper', str(dirpath) + '/' + file)
-
     def store_data_in_dataframe(self, game_dict_list):
 
         """
@@ -356,9 +341,15 @@ class Scraper:
 
         return df
 
-        
+    def dataframe_to_sql():
 
+        """
+        Converts the pandas dataframe containing the game info into an sql
+        database.
+        """
 
+        #1. 
+        pass
 
     def run_scraper(self):
 
@@ -369,7 +360,7 @@ class Scraper:
 
         self.driver_gets_url()
         self.accept_cookies()
-        game_links = self.get_game_links(5)
+        game_links = self.get_game_links(4)
         game_dict_list = self.scrape_game_info(game_links)
         return game_dict_list
 
@@ -385,43 +376,41 @@ class Scraper:
 
 if __name__ == '__main__':
 
-    url = 'https://store.steampowered.com/genre/Free%20to%20Play/'
+    url = 'https://store.steampowered.com/search/?sort_by=Released_DESC&filter=topsellers'
 
     scraper = Scraper(url)
     game_dict_list = scraper.run_scraper()
     scraper.save_data_locally(game_dict_list)
-    scraper.upload_to_aws()
     df = scraper.store_data_in_dataframe(game_dict_list)
     scraper.stop_scraper()
 
-# %%
-import boto3
+    # response = s3_client.upload_file(file_name, bucket, object_name)
+    response = s3_client.upload_file('/home/dg0834/Desktop/AiCore_Python/projects/webscraper/raw_data/1/images/4.jpg', 'vg-webscraper', 'game_json_and_images')
 
-s3_client = boto3.client('s3')
+    """
+    dataframe --> sql table --> send to RDS
+    """
 
-# response = s3_client.upload_file(file_name, bucket, object_name)
-response = s3_client.upload_file('/home/dg0834/Desktop/AiCore_Python/projects/webscraper/raw_data/1/images/4.jpg', 'vg-webscraper', 'game_json_and_images')
-# %%
-s3_client = boto3.client('s3')
+    """
+    DB Database identifier: vg-webscraper-db
+    username: postgres
+    password:
+    host:
+    port:
+    """
 
-def test():
+    DATABASE_TYPE = 'postgresql'
+    DBAPI = 'psycopg2'
+    ENDPOINT = 'vg-webscraper-database-v2.cywt6wpqordr.eu-west-2.rds.amazonaws.com' # Change it for your AWS endpoint
+    USER = 'postgres'
+    PASSWORD = 'willonerain'
+    PORT = 5432
+    DATABASE = 'postgres'
+    engine = create_engine(f"{DATABASE_TYPE}+{DBAPI}://{USER}:{PASSWORD}@{ENDPOINT}:{PORT}/{DATABASE}")
 
-    raw_data_dir = '/home/dg0834/Desktop/AiCore_Python/projects/webscraper/raw_data'
+    engine.connect()
 
-    os.chdir(raw_data_dir)
-
-    for dirpath, dirname, filename in os.walk(raw_data_dir):
-        print(f'Current Path: {dirpath}')
-        print(f'Directories: {dirname}')
-        print(f'Files: {filename} \n')
+    df.to_sql('game_dataset', engine, if_exists='replace')
 
 
-        for file in filename:
-            os.chdir(dirpath)
-            response = s3_client.upload_file(file, 'vg-webscraper', str(dirpath) + '/' + file)
-
-test()
-    
-# %%
-df
 # %%
